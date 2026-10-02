@@ -2,26 +2,48 @@ import type { TripReport } from "@/lib/calculations";
 import { CATEGORIES } from "@/lib/categories";
 import { formatDateRange, formatShortDate } from "@/lib/dates";
 import { formatINRPlain } from "@/lib/money";
-import type { Expense, Member, Trip } from "@/types/domain";
+import type { Expense, Member, Payment, Trip } from "@/types/domain";
 
 function nameLookup(members: readonly Member[]) {
   const names = new Map(members.map((m) => [m.id, m.name]));
   return (id: string) => names.get(id) ?? "Removed person";
 }
 
+function paymentLines(
+  payments: readonly Payment[],
+  name: (id: string) => string,
+  indent: string,
+): string[] {
+  if (payments.length === 0) return [];
+  return [
+    "Already paid (recorded by the group, not verified):",
+    ...payments.map(
+      (p) =>
+        `${indent}${name(p.fromMemberId)} → ${name(p.toMemberId)}: ${formatINRPlain(p.amountPaise)} (${formatShortDate(p.paidOn)})`,
+    ),
+    "",
+  ];
+}
+
 /** Short WhatsApp-friendly settlement text. Informational only — no payment links. */
-export function buildSettlementText(trip: Trip, members: readonly Member[], report: TripReport) {
+export function buildSettlementText(
+  trip: Trip,
+  members: readonly Member[],
+  report: TripReport,
+  payments: readonly Payment[] = [],
+) {
   const name = nameLookup(members);
   const lines = [
     `${trip.name} — Settlement`,
     "",
     `Total expenses: ${formatINRPlain(report.totals.totalPaise)}`,
     "",
+    ...paymentLines(payments, name, ""),
   ];
   if (report.settlements.length === 0) {
     lines.push("Everyone is settled. Nobody needs to pay anyone.");
   } else {
-    lines.push("Settlement:");
+    lines.push(payments.length > 0 ? "Still to settle:" : "Settlement:");
     for (const t of report.settlements) {
       lines.push(
         `${name(t.fromMemberId)} → ${name(t.toMemberId)}: ${formatINRPlain(t.amountPaise)}`,
@@ -37,6 +59,7 @@ export function buildSummaryText(
   trip: Trip,
   members: readonly Member[],
   report: TripReport,
+  payments: readonly Payment[] = [],
 ): string {
   const name = nameLookup(members);
   const { totals } = report;
@@ -71,12 +94,12 @@ export function buildSummaryText(
       `  ${name(b.memberId)}: paid ${formatINRPlain(b.totalPaid)} / share ${formatINRPlain(b.totalShare)} / ${status}`,
     );
   }
-  lines.push("");
+  lines.push("", ...paymentLines(payments, name, "  "));
 
   if (report.settlements.length === 0) {
     lines.push("Everyone is settled.");
   } else {
-    lines.push("Suggested settlement:");
+    lines.push(payments.length > 0 ? "Still to settle:" : "Suggested settlement:");
     for (const t of report.settlements) {
       lines.push(
         `  ${name(t.fromMemberId)} → ${name(t.toMemberId)}: ${formatINRPlain(t.amountPaise)}`,

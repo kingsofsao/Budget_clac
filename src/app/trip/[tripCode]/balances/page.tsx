@@ -3,9 +3,12 @@ import type { Metadata } from "next";
 import { CopyButton } from "@/components/copy-button";
 import { Money, Panel, Section } from "@/components/common";
 import { BalanceTable } from "@/features/balances/components/balance-table";
+import { PaymentList } from "@/features/settlements/components/payment-list";
+import { RecordPaymentDialog } from "@/features/settlements/components/record-payment-dialog";
 import { SettlementList } from "@/features/settlements/components/settlement-list";
 import { getTripData } from "@/features/trips/queries";
 import { buildSettlementText } from "@/lib/export";
+import { formatINR } from "@/lib/money";
 import { plural } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Balances" };
@@ -14,7 +17,7 @@ export default async function BalancesPage({ params }: PageProps<"/trip/[tripCod
   const { tripCode } = await params;
   const data = await getTripData(tripCode);
   if (!data) return null;
-  const { trip, members, report, me } = data;
+  const { trip, members, report, me, payments } = data;
   const memberMap = new Map(members.map((m) => [m.id, m]));
   const reconciled = report.invariantViolations.length === 0;
 
@@ -72,7 +75,7 @@ export default async function BalancesPage({ params }: PageProps<"/trip/[tripCod
         action={
           report.settlements.length > 0 ? (
             <CopyButton
-              text={buildSettlementText(trip, members, report)}
+              text={buildSettlementText(trip, members, report, payments)}
               label="Copy Settlement"
               successMessage="Settlement copied. Paste it in your group chat."
               size="sm"
@@ -80,7 +83,45 @@ export default async function BalancesPage({ params }: PageProps<"/trip/[tripCod
           ) : null
         }
       >
-        <SettlementList settlements={report.settlements} members={memberMap} meId={me?.id} />
+        <SettlementList
+          settlements={report.settlements}
+          members={memberMap}
+          meId={me?.id}
+          recordable={members.length > 1 ? { code: trip.code } : undefined}
+        />
+        {report.settlements.length > 0 ? (
+          <p className="text-muted-foreground text-xs">
+            Paid someone back? Tap <strong>Mark paid</strong> so everyone sees it. It&apos;s only a
+            note in Trip Split: the app doesn&apos;t move money or check payments.
+          </p>
+        ) : null}
+      </Section>
+
+      <Section
+        id="payments"
+        title="Recorded payments"
+        description={
+          payments.length > 0
+            ? `${plural(payments.length, "payment")} · ${formatINR(report.recordedPaymentsPaise)} settled so far`
+            : "Payments people have already made to each other."
+        }
+        action={
+          members.length > 1 ? (
+            <RecordPaymentDialog
+              code={trip.code}
+              members={members.map((m) => ({ id: m.id, name: m.name }))}
+              triggerSize="sm"
+            />
+          ) : null
+        }
+      >
+        {payments.length > 0 ? (
+          <PaymentList code={trip.code} payments={payments} members={memberMap} />
+        ) : (
+          <p className="text-muted-foreground bg-card rounded-2xl border border-dashed p-4 text-sm">
+            No payments recorded yet.
+          </p>
+        )}
       </Section>
 
       <Section id="everyone" title="Everyone's balance">

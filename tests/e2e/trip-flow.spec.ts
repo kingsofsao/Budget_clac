@@ -101,7 +101,7 @@ test("full trip lifecycle: create → people → expenses → balances → summa
       uncheck: ["Vishal"],
       day: "Day 2 · 02 Oct",
     });
-    await page.getByRole("radio", { name: "Custom amounts" }).click();
+    await page.getByRole("radio", { name: "Amounts" }).click();
     await page.getByLabel("Surya's share").fill("400");
     await page.getByLabel("Nithish's share").fill("300");
     await page.getByLabel("Gokul's share").fill("200");
@@ -131,9 +131,9 @@ test("full trip lifecycle: create → people → expenses → balances → summa
     const transfers = page.getByRole("list", { name: "Suggested payments" }).getByRole("listitem");
     await expect(transfers).toHaveCount(3);
     // Text content also contains the avatars' initials, hence the `.*`.
-    await expect(transfers.nth(0)).toContainText(/Nithish.*pays.*Surya₹750$/);
-    await expect(transfers.nth(1)).toContainText(/Vishal.*pays.*Gokul₹250$/);
-    await expect(transfers.nth(2)).toContainText(/Vishal.*pays.*Surya₹200$/);
+    await expect(transfers.nth(0)).toContainText(/Nithish.*pays.*Surya₹750/);
+    await expect(transfers.nth(1)).toContainText(/Vishal.*pays.*Gokul₹250/);
+    await expect(transfers.nth(2)).toContainText(/Vishal.*pays.*Surya₹200/);
     await expect(page.getByText(/all balances add up to ₹0/)).toBeVisible();
   });
 
@@ -238,6 +238,39 @@ test("full trip lifecycle: create → people → expenses → balances → summa
   await test.step("no browser console errors during normal use", async () => {
     expect(consoleErrors).toEqual([]);
   });
+});
+
+test("the owner can delete a trip (with expenses and payments) after confirming", async ({
+  page,
+}) => {
+  await page.goto("/create");
+  await page.getByLabel("Trip name").fill("Trip To Delete");
+  await page.getByLabel("Your name").fill("Owner");
+  await page.getByRole("button", { name: "Create trip" }).click();
+  await page.waitForURL(/\/trip\/[A-Z0-9]{8}\/people/);
+  const base = new URL(page.url()).pathname.replace("/people", "");
+  // Regression: deleting used to fail once a trip had expenses.
+  await page.getByLabel("Name", { exact: true }).fill("Friend");
+  await page.getByLabel("Name", { exact: true }).press("Enter");
+  await expect(page.getByRole("list").getByText("Friend", { exact: true })).toBeVisible();
+  await page.goto(`${base}/expenses/new`);
+  await page.getByLabel("Amount").fill("500");
+  await page.getByLabel("Description").fill("Tea");
+  await page.getByRole("button", { name: "Save expense" }).click();
+  await page.waitForURL(`**${base}/expenses`);
+  await page.goto(`${base}/balances`);
+  await page.getByRole("button", { name: "Mark Friend → Owner as paid" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Record payment" }).click();
+  await expect(page.getByRole("list", { name: "Recorded payments" })).toBeVisible();
+  await page.goto(`${base}/settings`);
+  await page.getByRole("button", { name: "Delete trip" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete trip" }).click();
+  await page.waitForURL(/\/\?deleted=1$/);
+  await expect(page.getByText("The trip was deleted.")).toBeVisible();
+  await page.goto(base);
+  await expect(
+    page.getByRole("heading", { name: "You don't have access to this trip" }),
+  ).toBeVisible();
 });
 
 test("unknown or inaccessible trip codes show a clear message", async ({ page }) => {

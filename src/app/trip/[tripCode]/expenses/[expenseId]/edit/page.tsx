@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Panel } from "@/components/common";
 import { ExpenseForm } from "@/features/expenses/components/expense-form";
 import { getTripData } from "@/features/trips/queries";
-import { paiseToInputString } from "@/lib/money";
+import { expenseToFormValues } from "@/features/expenses/form-values";
 
 export const metadata: Metadata = { title: "Edit expense" };
 
@@ -30,22 +30,7 @@ export default async function EditExpensePage({
           members={data.members}
           trip={data.trip}
           expenseId={expense.id}
-          defaultValues={{
-            description: expense.description,
-            amount: paiseToInputString(expense.amountPaise),
-            paidByMemberId: expense.paidByMemberId,
-            category: expense.category,
-            splitMethod: expense.splitMethod,
-            expenseDate: expense.expenseDate,
-            notes: expense.notes ?? "",
-            participantIds: expense.shares.map((s) => s.memberId),
-            customShares:
-              expense.splitMethod === "custom"
-                ? Object.fromEntries(
-                    expense.shares.map((s) => [s.memberId, paiseToInputString(s.sharePaise)]),
-                  )
-                : {},
-          }}
+          defaultValues={expenseToFormValues(expense)}
         />
       </Panel>
     </div>

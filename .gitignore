@@ -24,3 +24,6 @@ supabase/.temp
 .vercel
 .DS_Store
 npm-debug.log*
+
+# smoke test output
+smoke-failure.png

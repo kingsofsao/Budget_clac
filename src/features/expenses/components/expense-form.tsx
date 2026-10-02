@@ -16,28 +16,58 @@ import {
   Textarea,
 } from "@/components/ui/form-controls";
 import { saveExpenseAction } from "@/features/expenses/actions";
-import { calculateExpenseShares, orderByMembers } from "@/lib/calculations";
+import { sharesForExpense } from "@/features/expenses/split";
+import { orderByMembers } from "@/lib/calculations";
 import { CATEGORIES, CATEGORY_IDS } from "@/lib/categories";
 import { eachDay, formatShortDate } from "@/lib/dates";
 import { GENERIC_ERROR } from "@/lib/errors";
-import { formatINR, paiseToInputString, parseINR, splitEqual } from "@/lib/money";
+import {
+  basisPointsToInputString,
+  formatBasisPoints,
+  formatINR,
+  paiseToInputString,
+  parseINR,
+  parsePercent,
+  splitEqual,
+} from "@/lib/money";
 import { cn } from "@/lib/utils";
-import { parseExpenseForm, type ExpenseFormValues } from "@/lib/validation";
-import type { Member } from "@/types/domain";
+import { parseExpenseForm, parseShareCount, type ExpenseFormValues } from "@/lib/validation";
+import type { Member, SplitMethod } from "@/types/domain";
 
-type FormValues = ExpenseFormValues & { customSharesTotal?: string };
+type FormValues = ExpenseFormValues & { splitInputsTotal?: string };
+
+const SPLIT_OPTIONS: { method: SplitMethod; label: string }[] = [
+  { method: "equal", label: "Equally" },
+  { method: "custom", label: "Amounts" },
+  { method: "shares", label: "Shares" },
+  { method: "percentage", label: "Percent" },
+];
+
+const SPLIT_HELP: Record<SplitMethod, string> = {
+  equal: "Everyone ticked pays the same. Leftover paise go to the first people in the list.",
+  custom: "Enter what each person owes. The total must match the amount exactly.",
+  shares: "Give more shares to people who should pay more: 2 shares pay twice as much as 1.",
+  percentage: "Enter each person's percentage. They must add up to exactly 100%.",
+};
+
+const INPUT_LABEL: Record<SplitMethod, string> = {
+  equal: "share",
+  custom: "share",
+  shares: "number of shares",
+  percentage: "percentage",
+};
 
 /** Map our shared validator's flat field errors into react-hook-form's nested shape. */
 function toFieldErrors(flat: Record<string, string>): FieldErrors<FormValues> {
   const errors: Record<string, unknown> = {};
-  const shares: Record<string, { type: string; message: string }> = {};
+  const inputs: Record<string, { type: string; message: string }> = {};
   for (const [key, message] of Object.entries(flat)) {
-    if (key.startsWith("customShares."))
-      shares[key.slice("customShares.".length)] = { type: "validate", message };
-    else if (key === "customShares") errors.customSharesTotal = { type: "validate", message };
+    if (key.startsWith("splitInputs."))
+      inputs[key.slice("splitInputs.".length)] = { type: "validate", message };
+    else if (key === "splitInputs") errors.splitInputsTotal = { type: "validate", message };
     else errors[key] = { type: "validate", message };
   }
-  if (Object.keys(shares).length) errors.customShares = shares;
+  if (Object.keys(inputs).length) errors.splitInputs = inputs;
   return errors as FieldErrors<FormValues>;
 }
 
@@ -47,6 +77,14 @@ const resolver: Resolver<FormValues> = async (values) => {
     ? { values, errors: {} }
     : { values: {}, errors: toFieldErrors(result.fieldErrors) };
 };
+
+/** Parse one per-person input for the given method (display preview only). */
+function parseInput(method: SplitMethod, raw: string): number | null {
+  if (method === "custom") return parseINR(raw);
+  if (method === "shares") return parseShareCount(raw);
+  const bp = parsePercent(raw);
+  return bp === 0 ? null : bp;
+}
 
 interface ExpenseFormProps {
   code: string;
@@ -71,74 +109,101 @@ export function ExpenseForm({ code, members, trip, expenseId, defaultValues }: E
   const amountText = useWatch({ control, name: "amount" });
   const splitMethod = useWatch({ control, name: "splitMethod" });
   const participantIds = useWatch({ control, name: "participantIds" });
-  const customShares = useWatch({ control, name: "customShares" });
+  const splitInputs = useWatch({ control, name: "splitInputs" });
   const paidBy = useWatch({ control, name: "paidByMemberId" });
   const amountPaise = parseINR(amountText ?? "");
   const validAmount = amountPaise !== null && amountPaise > 0 ? amountPaise : null;
   const days = useMemo(() => eachDay(trip.startDate, trip.endDate), [trip.startDate, trip.endDate]);
   const selected = useMemo(() => new Set(participantIds), [participantIds]);
 
-  // Live preview of equal shares (display only — the server recomputes).
-  const equalShares = useMemo(() => {
-    if (splitMethod !== "equal" || !validAmount || participantIds.length === 0)
-      return new Map<string, number>();
-    const ordered = orderByMembers(participantIds, members);
-    return new Map(
-      calculateExpenseShares({
-        method: "equal",
-        amountPaise: validAmount,
-        participantIds: ordered,
-      }).map((s) => [s.memberId, s.sharePaise]),
-    );
-  }, [splitMethod, validAmount, participantIds, members]);
-
-  const customTotal = useMemo(() => {
+  // Per-person inputs as numbers (paise / shares / basis points) for live feedback.
+  const typed = useMemo(() => {
+    const values = new Map<string, number>();
     let total = 0;
     let invalid = false;
+    if (splitMethod === "equal") return { values, total, invalid };
     for (const id of participantIds) {
-      const raw = (customShares[id] ?? "").trim();
-      if (!raw) continue;
-      const p = parseINR(raw);
-      if (p === null) invalid = true;
-      else total += p;
+      const raw = (splitInputs[id] ?? "").trim();
+      if (!raw) {
+        if (splitMethod !== "custom") invalid = true;
+        continue;
+      }
+      const v = parseInput(splitMethod, raw);
+      if (v === null) invalid = true;
+      else {
+        values.set(id, v);
+        total += v;
+      }
     }
-    return { total, invalid };
-  }, [participantIds, customShares]);
+    return { values, total, invalid };
+  }, [participantIds, splitInputs, splitMethod]);
 
-  const setParticipants = (ids: string[]) =>
-    setValue("participantIds", orderByMembers(ids, members), {
+  // Live preview of each person's amount (display only; the server recomputes).
+  const preview = useMemo(() => {
+    const none = new Map<string, number>();
+    if (!validAmount || participantIds.length === 0 || splitMethod === "custom") return none;
+    if (splitMethod !== "equal" && typed.invalid) return none;
+    if (splitMethod === "percentage" && typed.total !== 10_000) return none;
+    try {
+      const shares = sharesForExpense(
+        { splitMethod, amountPaise: validAmount, participantIds, splitValues: typed.values },
+        members,
+      );
+      return new Map(shares.map((s) => [s.memberId, s.sharePaise]));
+    } catch {
+      return none;
+    }
+  }, [splitMethod, validAmount, participantIds, typed, members]);
+
+  /** Sensible starting values when switching method, so people only adjust differences. */
+  const defaultInputs = (method: SplitMethod, ids: string[]): Record<string, string> => {
+    const ordered = orderByMembers(ids, members);
+    const next: Record<string, string> = {};
+    if (method === "shares") ordered.forEach((id) => (next[id] = "1"));
+    if (method === "percentage" && ordered.length) {
+      const parts = splitEqual(10_000, ordered.length);
+      ordered.forEach((id, i) => (next[id] = basisPointsToInputString(parts[i] ?? 0)));
+    }
+    if (method === "custom" && validAmount && ordered.length) {
+      const parts = splitEqual(validAmount, ordered.length);
+      ordered.forEach((id, i) => (next[id] = paiseToInputString(parts[i] ?? 0)));
+    }
+    return next;
+  };
+
+  const setParticipants = (ids: string[]) => {
+    const ordered = orderByMembers(ids, members);
+    setValue("participantIds", ordered, {
       shouldValidate: formState.isSubmitted,
       shouldDirty: true,
     });
-
-  const switchSplit = (method: "equal" | "custom") => {
-    setValue("splitMethod", method, { shouldDirty: true });
-    // Pre-fill custom amounts with the equal split so the user only adjusts differences.
-    if (method === "custom" && validAmount && participantIds.length > 0) {
-      const current = getValues("customShares");
-      const hasValues = participantIds.some((id) => (current[id] ?? "").trim() !== "");
-      if (!hasValues) {
-        const ordered = orderByMembers(participantIds, members);
-        const parts = splitEqual(validAmount, ordered.length);
-        const next: Record<string, string> = {};
-        ordered.forEach((id, i) => (next[id] = paiseToInputString(parts[i] ?? 0)));
-        setValue("customShares", next);
-      }
+    // Someone newly ticked in a shares split starts with 1 share.
+    if (splitMethod === "shares") {
+      const current = getValues("splitInputs");
+      const next = { ...current };
+      for (const id of ordered) if (!(current[id] ?? "").trim()) next[id] = "1";
+      setValue("splitInputs", next);
     }
+  };
+
+  const switchSplit = (method: SplitMethod) => {
+    if (method === splitMethod) return;
+    setValue("splitMethod", method, { shouldDirty: true });
+    setValue("splitInputs", defaultInputs(method, participantIds), { shouldDirty: true });
   };
 
   const save = async (values: FormValues, addAnother: boolean) => {
     setFormError(null);
-    const { customSharesTotal: _ignored, ...payload } = values;
+    const { splitInputsTotal: _ignored, ...payload } = values;
     void _ignored;
     try {
       const result = await saveExpenseAction(code, expenseId, payload);
       if (!result.ok) {
         const mapped = toFieldErrors(result.fieldErrors ?? {});
         for (const [key, err] of Object.entries(mapped)) {
-          if (key === "customShares") {
+          if (key === "splitInputs") {
             for (const [id, e] of Object.entries(err as Record<string, { message: string }>)) {
-              setError(`customShares.${id}`, { message: e.message });
+              setError(`splitInputs.${id}`, { message: e.message });
             }
           } else
             setError(key as keyof FormValues, { message: (err as { message: string }).message });
@@ -171,7 +236,9 @@ export function ExpenseForm({ code, members, trip, expenseId, defaultValues }: E
   const onSubmitAndAddAnother = handleSubmit((values) => save(values, true));
 
   const payer = members.find((m) => m.id === paidBy);
-  const remaining = validAmount !== null ? validAmount - customTotal.total : null;
+  const remaining = validAmount !== null ? validAmount - typed.total : null;
+  const customValid = remaining === 0 && !typed.invalid;
+  const percentValid = typed.total === 10_000 && !typed.invalid;
 
   return (
     <form onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
@@ -283,30 +350,28 @@ export function ExpenseForm({ code, members, trip, expenseId, defaultValues }: E
         <div
           role="radiogroup"
           aria-label="Split method"
-          className="bg-muted grid grid-cols-2 gap-1 rounded-lg p-1"
+          className="bg-muted grid grid-cols-4 gap-1 rounded-lg p-1"
         >
-          {(["equal", "custom"] as const).map((m) => (
+          {SPLIT_OPTIONS.map(({ method, label }) => (
             <button
-              key={m}
+              key={method}
               type="button"
               role="radio"
-              aria-checked={splitMethod === m}
-              onClick={() => switchSplit(m)}
+              aria-checked={splitMethod === method}
+              onClick={() => switchSplit(method)}
               className={cn(
                 "h-10 rounded-md text-sm font-medium",
-                splitMethod === m
+                splitMethod === method
                   ? "bg-card shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {m === "equal" ? "Equally" : "Custom amounts"}
+              {label}
             </button>
           ))}
         </div>
         <p id="split-help" className="text-muted-foreground text-sm">
-          {splitMethod === "equal"
-            ? "Everyone ticked pays the same. Leftover paise go to the first people in the list."
-            : "Enter what each person owes. The total must match the amount exactly."}
+          {SPLIT_HELP[splitMethod]}
         </p>
 
         <div className="flex items-center justify-between gap-2">
@@ -330,7 +395,8 @@ export function ExpenseForm({ code, members, trip, expenseId, defaultValues }: E
         <ul className="bg-card flex flex-col divide-y rounded-xl border">
           {members.map((m) => {
             const checked = selected.has(m.id);
-            const shareError = errors.customShares?.[m.id]?.message;
+            const inputError = errors.splitInputs?.[m.id]?.message;
+            const amount = preview.get(m.id);
             return (
               <li key={m.id} className="flex items-center gap-3 px-3 py-2">
                 <Checkbox
@@ -346,52 +412,63 @@ export function ExpenseForm({ code, members, trip, expenseId, defaultValues }: E
                 />
                 <label
                   htmlFor={`participant-${m.id}`}
-                  className="flex min-h-11 flex-1 cursor-pointer items-center gap-2"
+                  className="flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-2"
                 >
                   <MemberAvatar name={m.name} color={m.color} size="sm" />
-                  <span className="font-medium">{m.name}</span>
+                  <span className="truncate font-medium">{m.name}</span>
                   {m.id === paidBy ? (
                     <span className="text-muted-foreground text-xs">(paid)</span>
                   ) : null}
                 </label>
-                {splitMethod === "equal" ? (
-                  <span
-                    className={cn(
-                      "tabular text-sm",
-                      checked ? "font-medium" : "text-muted-foreground",
-                    )}
-                  >
-                    {checked && equalShares.has(m.id)
-                      ? formatINR(equalShares.get(m.id)!)
-                      : checked
-                        ? "—"
-                        : "Not included"}
+                {!checked ? (
+                  <span className="text-muted-foreground text-sm">Not included</span>
+                ) : splitMethod === "equal" ? (
+                  <span className="tabular text-sm font-medium">
+                    {amount !== undefined ? formatINR(amount) : "—"}
                   </span>
-                ) : checked ? (
-                  <div className="flex flex-col items-end">
-                    <div className="relative w-32">
-                      <span
-                        className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
-                        aria-hidden="true"
-                      >
-                        ₹
-                      </span>
-                      <Input
-                        {...register(`customShares.${m.id}`)}
-                        aria-label={`${m.name}'s share`}
-                        aria-invalid={shareError ? true : undefined}
-                        inputMode="decimal"
-                        autoComplete="off"
-                        placeholder="0"
-                        className="tabular h-10 pl-6 text-right"
-                      />
+                ) : (
+                  <div className="flex flex-col items-end gap-0.5">
+                    <div className="flex items-center gap-2">
+                      {splitMethod !== "custom" ? (
+                        <span className="tabular text-muted-foreground text-sm">
+                          {amount !== undefined ? formatINR(amount) : "—"}
+                        </span>
+                      ) : null}
+                      <div className={cn("relative", splitMethod === "custom" ? "w-32" : "w-24")}>
+                        {splitMethod === "custom" ? (
+                          <span
+                            className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
+                            aria-hidden="true"
+                          >
+                            ₹
+                          </span>
+                        ) : null}
+                        <Input
+                          {...register(`splitInputs.${m.id}`)}
+                          aria-label={`${m.name}'s ${INPUT_LABEL[splitMethod]}`}
+                          aria-invalid={inputError ? true : undefined}
+                          inputMode={splitMethod === "shares" ? "numeric" : "decimal"}
+                          autoComplete="off"
+                          placeholder="0"
+                          className={cn(
+                            "tabular h-10 text-right",
+                            splitMethod === "custom" ? "pl-6" : "pr-8",
+                          )}
+                        />
+                        {splitMethod !== "custom" ? (
+                          <span
+                            className="text-muted-foreground pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-sm"
+                            aria-hidden="true"
+                          >
+                            {splitMethod === "shares" ? "×" : "%"}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
-                    {shareError ? (
-                      <span className="text-destructive text-xs">{shareError}</span>
+                    {inputError ? (
+                      <span className="text-destructive text-xs">{inputError}</span>
                     ) : null}
                   </div>
-                ) : (
-                  <span className="text-muted-foreground text-sm">Not included</span>
                 )}
               </li>
             );
@@ -400,19 +477,13 @@ export function ExpenseForm({ code, members, trip, expenseId, defaultValues }: E
         <FieldError message={errors.participantIds?.message} />
 
         {splitMethod === "custom" && validAmount !== null ? (
-          <div
-            aria-live="polite"
-            className={cn(
-              "flex flex-wrap items-center justify-between gap-2 rounded-xl p-3 text-sm",
-              remaining === 0 && !customTotal.invalid ? "bg-receive-bg text-receive" : "bg-muted",
-            )}
-          >
+          <TotalBar ok={customValid}>
             <span>
-              Total entered <strong className="tabular">{formatINR(customTotal.total)}</strong> of{" "}
+              Total entered <strong className="tabular">{formatINR(typed.total)}</strong> of{" "}
               <strong className="tabular">{formatINR(validAmount)}</strong>
             </span>
             <span className="flex items-center gap-1 font-medium">
-              {remaining === 0 && !customTotal.invalid ? (
+              {customValid ? (
                 <>
                   <CheckCircle2 className="size-4" aria-hidden="true" /> Valid
                 </>
@@ -422,9 +493,39 @@ export function ExpenseForm({ code, members, trip, expenseId, defaultValues }: E
                 <span className="text-pay">{formatINR(-remaining)} too much</span>
               ) : null}
             </span>
-          </div>
+          </TotalBar>
         ) : null}
-        <FieldError message={errors.customSharesTotal?.message} />
+        {splitMethod === "percentage" && participantIds.length > 0 ? (
+          <TotalBar ok={percentValid}>
+            <span>
+              Total <strong className="tabular">{formatBasisPoints(typed.total)}</strong> of 100%
+            </span>
+            <span className="flex items-center gap-1 font-medium">
+              {percentValid ? (
+                <>
+                  <CheckCircle2 className="size-4" aria-hidden="true" /> Valid
+                </>
+              ) : typed.total < 10_000 ? (
+                `${formatBasisPoints(10_000 - typed.total)} left`
+              ) : (
+                <span className="text-pay">{formatBasisPoints(typed.total - 10_000)} too much</span>
+              )}
+            </span>
+          </TotalBar>
+        ) : null}
+        {splitMethod === "shares" && participantIds.length > 0 && !typed.invalid ? (
+          <TotalBar ok>
+            <span>
+              <strong className="tabular">{typed.total}</strong> shares in total
+            </span>
+            {validAmount ? (
+              <span className="tabular font-medium">
+                ≈ {formatINR(Math.round(validAmount / Math.max(1, typed.total)))} per share
+              </span>
+            ) : null}
+          </TotalBar>
+        ) : null}
+        <FieldError message={errors.splitInputsTotal?.message} />
 
         {payer && !selected.has(payer.id) && participantIds.length > 0 ? (
           <p className="bg-accent/60 text-accent-foreground flex gap-2 rounded-xl p-3 text-sm">
@@ -469,5 +570,19 @@ export function ExpenseForm({ code, members, trip, expenseId, defaultValues }: E
         </Button>
       </div>
     </form>
+  );
+}
+
+function TotalBar({ ok, children }: { ok: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      aria-live="polite"
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-2 rounded-xl p-3 text-sm",
+        ok ? "bg-receive-bg text-receive" : "bg-muted",
+      )}
+    >
+      {children}
+    </div>
   );
 }

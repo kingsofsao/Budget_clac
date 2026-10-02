@@ -19,7 +19,7 @@ const baseForm = {
   expenseDate: "2026-10-01",
   notes: "",
   participantIds: [uuid(1), uuid(2), uuid(3)],
-  customShares: {},
+  splitInputs: {},
 };
 
 describe("parseExpenseForm (shared client/server validation)", () => {
@@ -46,10 +46,10 @@ describe("parseExpenseForm (shared client/server validation)", () => {
     const r = parseExpenseForm({
       ...baseForm,
       splitMethod: "custom",
-      customShares: { [uuid(1)]: "400", [uuid(2)]: "300", [uuid(3)]: "300" },
+      splitInputs: { [uuid(1)]: "400", [uuid(2)]: "300", [uuid(3)]: "300" },
     });
     expect(r.ok).toBe(false);
-    expect(!r.ok && r.fieldErrors.customShares).toBe(
+    expect(!r.ok && r.fieldErrors.splitInputs).toBe(
       "The participant shares must add up to ₹1,800 (currently ₹1,000).",
     );
   });
@@ -59,10 +59,10 @@ describe("parseExpenseForm (shared client/server validation)", () => {
       ...baseForm,
       amount: "1000",
       splitMethod: "custom",
-      customShares: { [uuid(1)]: "400", [uuid(2)]: "300", [uuid(3)]: "300.00" },
+      splitInputs: { [uuid(1)]: "400", [uuid(2)]: "300", [uuid(3)]: "300.00" },
     });
     expect(r.ok).toBe(true);
-    expect(r.ok && [...r.data.customShares!.values()]).toEqual([40000, 30000, 30000]);
+    expect(r.ok && [...r.data.splitValues!.values()]).toEqual([40000, 30000, 30000]);
   });
 
   it("rejects invalid ids, categories and dates", () => {

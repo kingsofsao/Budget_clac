@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { CATEGORY_IDS } from "@/lib/categories";
 import { dayCount, isValidISODate } from "@/lib/dates";
-import { MAX_EXPENSE_PAISE, formatINR, parseINR } from "@/lib/money";
+import {
+  MAX_EXPENSE_PAISE,
+  formatBasisPoints,
+  formatINR,
+  parseINR,
+  parsePercent,
+} from "@/lib/money";
 import { SPLIT_METHODS } from "@/types/domain";
 import { TRIP_CODE_RE, normaliseTripCode } from "@/lib/utils";
 
@@ -126,8 +132,12 @@ export const expenseFormSchema = z.object({
   expenseDate: z.string().min(1, "Choose a date."),
   notes: z.string().max(500, "Notes must be at most 500 characters."),
   participantIds: z.array(z.string()).min(1, "Select at least one participant."),
-  /** memberId → rupee string, only used when splitMethod is "custom". */
-  customShares: z.record(z.string(), z.string()),
+  /**
+   * memberId → the per-person value as typed, depending on splitMethod:
+   * custom → rupees ("400.50"), shares → whole number ("2"), percentage → "33.33".
+   * Ignored for equal splits.
+   */
+  splitInputs: z.record(z.string(), z.string()),
 });
 export type ExpenseFormValues = z.infer<typeof expenseFormSchema>;
 
@@ -140,13 +150,27 @@ export interface ParsedExpense {
   expenseDate: string;
   notes: string | null;
   participantIds: string[];
-  /** Present for custom splits: memberId → paise. */
-  customShares: Map<string, number> | null;
+  /**
+   * memberId → parsed integer value: paise (custom), share count (shares) or
+   * basis points (percentage). Null for equal splits.
+   */
+  splitValues: Map<string, number> | null;
+}
+
+export const MAX_SHARES_PER_PERSON = 1000;
+
+/** Parse a whole number of shares ("2") for the shares split. */
+export function parseShareCount(input: string): number | null {
+  const v = input.trim();
+  if (!/^\d{1,4}$/.test(v)) return null;
+  const n = Number.parseInt(v, 10);
+  return n >= 1 && n <= MAX_SHARES_PER_PERSON ? n : null;
 }
 
 /**
- * Parse & validate expense form values into integer-paise data.
- * Returns field errors keyed like the form fields. Used on both client and server.
+ * Parse & validate expense form values into integer data (paise, shares, basis
+ * points). Returns field errors keyed like the form fields. Used on both the
+ * client (instant feedback) and the server (authoritative).
  */
 export function parseExpenseForm(
   values: unknown,
@@ -180,25 +204,42 @@ export function parseExpenseForm(
     fieldErrors.participantIds = "A participant was selected twice.";
   }
 
-  let customShares: Map<string, number> | null = null;
-  if (v.splitMethod === "custom" && amount.success) {
-    customShares = new Map();
+  let splitValues: Map<string, number> | null = null;
+  if (v.splitMethod !== "equal") {
+    splitValues = new Map();
     let total = 0;
     for (const id of v.participantIds) {
-      const raw = (v.customShares[id] ?? "").trim();
-      const paise = raw === "" ? 0 : parseINR(raw);
-      if (paise === null) {
-        fieldErrors[`customShares.${id}`] = "Enter a valid amount.";
+      const raw = (v.splitInputs[id] ?? "").trim();
+      let value: number | null;
+      let message: string;
+      if (v.splitMethod === "custom") {
+        value = raw === "" ? 0 : parseINR(raw);
+        message = "Enter a valid amount.";
+      } else if (v.splitMethod === "shares") {
+        value = parseShareCount(raw);
+        message = `Enter a whole number from 1 to ${MAX_SHARES_PER_PERSON}.`;
+      } else {
+        value = parsePercent(raw);
+        if (value === 0) value = null;
+        message = "Enter a percentage above 0, up to 2 decimals.";
+      }
+      if (value === null) {
+        fieldErrors[`splitInputs.${id}`] = message;
         continue;
       }
-      customShares.set(id, paise);
-      total += paise;
+      splitValues.set(id, value);
+      total += value;
     }
-    const hasShareErrors = Object.keys(fieldErrors).some((k) => k.startsWith("customShares."));
-    if (!hasShareErrors && total !== amount.data) {
-      fieldErrors.customShares = `The participant shares must add up to ${formatINR(amount.data)} (currently ${formatINR(total)}).`;
-    } else if (!hasShareErrors && [...customShares.values()].every((p) => p === 0)) {
-      fieldErrors.customShares = "At least one participant needs a share.";
+    const hasValueErrors = Object.keys(fieldErrors).some((k) => k.startsWith("splitInputs."));
+    if (!hasValueErrors && v.splitMethod === "custom" && amount.success) {
+      if (total !== amount.data) {
+        fieldErrors.splitInputs = `The participant shares must add up to ${formatINR(amount.data)} (currently ${formatINR(total)}).`;
+      } else if ([...splitValues.values()].every((p) => p === 0)) {
+        fieldErrors.splitInputs = "At least one participant needs a share.";
+      }
+    }
+    if (!hasValueErrors && v.splitMethod === "percentage" && total !== 10_000) {
+      fieldErrors.splitInputs = `Percentages must add up to 100% (currently ${formatBasisPoints(total)}).`;
     }
   }
 
@@ -214,10 +255,25 @@ export function parseExpenseForm(
       expenseDate: v.expenseDate,
       notes: v.notes.trim() ? v.notes.trim() : null,
       participantIds: v.participantIds,
-      customShares,
+      splitValues,
     },
   };
 }
+
+/** Values for recording a settlement payment (strings as typed). */
+export const paymentFormSchema = z.object({
+  fromMemberId: uuidSchema,
+  toMemberId: uuidSchema,
+  amount: amountSchema,
+  paidOn: z.string().refine((v) => isValidISODate(v), "Choose a valid date."),
+  note: z
+    .string()
+    .trim()
+    .max(200, "Keep the note under 200 characters.")
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+});
+export type PaymentFormInput = z.input<typeof paymentFormSchema>;
 
 export const emailSchema = z
   .string()

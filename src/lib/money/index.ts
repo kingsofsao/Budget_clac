@@ -227,3 +227,33 @@ export function validateSplit(amount: Paise, shares: readonly Paise[]): SplitVal
     remaining: amount - total,
   };
 }
+
+/**
+ * Parse a percentage typed by the user into integer basis points (1/100 of a
+ * percent), without floating point: "33.33" → 3333, "50" → 5000, "12.5%" → 1250.
+ * Returns null for invalid input or values outside 0–100%.
+ */
+export function parsePercent(input: string): number | null {
+  const cleaned = input.trim().replace(/%$/, "").trim();
+  const match = /^(\d{1,3})?(?:\.(\d{1,2}))?$/.exec(cleaned);
+  if (!match || cleaned === "" || cleaned === ".") return null;
+  const whole = match[1] ? Number.parseInt(match[1], 10) : 0;
+  const fraction = match[2] ? Number.parseInt(match[2].padEnd(2, "0"), 10) : 0;
+  const bp = whole * 100 + fraction;
+  return bp <= 10_000 ? bp : null;
+}
+
+/** Format basis points as a percentage: 3333 → "33.33%", 5000 → "50%", 1250 → "12.5%". */
+export function formatBasisPoints(bp: number): string {
+  const whole = Math.floor(Math.abs(bp) / 100);
+  const rem = Math.abs(bp) % 100;
+  const sign = bp < 0 ? "−" : "";
+  if (rem === 0) return `${sign}${whole}%`;
+  const fraction = String(rem).padStart(2, "0").replace(/0$/, "");
+  return `${sign}${whole}.${fraction}%`;
+}
+
+/** The text a user would type for a basis-point value: 3333 → "33.33", 5000 → "50". */
+export function basisPointsToInputString(bp: number): string {
+  return formatBasisPoints(bp).replace("%", "");
+}

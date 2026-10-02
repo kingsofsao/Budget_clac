@@ -4,7 +4,15 @@ import { buildTripReport, type TripReport } from "@/lib/calculations";
 import { isCategoryId } from "@/lib/categories";
 import { createClient } from "@/lib/supabase/server";
 import { TRIP_CODE_RE } from "@/lib/utils";
-import type { Expense, Member, SplitMethod, Trip, TripRole } from "@/types/domain";
+import {
+  SPLIT_METHODS,
+  type Expense,
+  type Member,
+  type Payment,
+  type SplitMethod,
+  type Trip,
+  type TripRole,
+} from "@/types/domain";
 
 export interface CurrentUser {
   id: string;
@@ -126,7 +134,7 @@ export const getExpenses = cache(async (tripId: string): Promise<Expense[]> => {
     const { data, error } = await supabase
       .from("expenses")
       .select(
-        "id, description, amount_paise, paid_by_member_id, category, split_method, expense_date, notes, created_at, updated_at, expense_participants(member_id, share_paise)",
+        "id, description, amount_paise, paid_by_member_id, category, split_method, expense_date, notes, created_at, updated_at, expense_participants(member_id, share_paise, split_value)",
       )
       .eq("trip_id", tripId)
       .order("expense_date", { ascending: false })
@@ -141,7 +149,9 @@ export const getExpenses = cache(async (tripId: string): Promise<Expense[]> => {
         amountPaise: Number(e.amount_paise),
         paidByMemberId: e.paid_by_member_id,
         category: isCategoryId(e.category) ? e.category : "other",
-        splitMethod: (e.split_method === "custom" ? "custom" : "equal") as SplitMethod,
+        splitMethod: (SPLIT_METHODS as readonly string[]).includes(e.split_method)
+          ? (e.split_method as SplitMethod)
+          : "custom",
         expenseDate: e.expense_date,
         notes: e.notes,
         createdAt: e.created_at,
@@ -149,6 +159,7 @@ export const getExpenses = cache(async (tripId: string): Promise<Expense[]> => {
         shares: e.expense_participants.map((p) => ({
           memberId: p.member_id,
           sharePaise: Number(p.share_paise),
+          splitValue: p.split_value,
         })),
       });
     }
@@ -157,9 +168,32 @@ export const getExpenses = cache(async (tripId: string): Promise<Expense[]> => {
   return expenses;
 });
 
+/** Payments members recorded as made, oldest first. */
+export const getPayments = cache(async (tripId: string): Promise<Payment[]> => {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("settlement_payments")
+    .select("id, from_member_id, to_member_id, amount_paise, paid_on, note, created_at")
+    .eq("trip_id", tripId)
+    .order("paid_on")
+    .order("created_at")
+    .limit(2000);
+  if (error) throw new Error(`Failed to load payments: ${error.message}`);
+  return data.map((p) => ({
+    id: p.id,
+    fromMemberId: p.from_member_id,
+    toMemberId: p.to_member_id,
+    amountPaise: Number(p.amount_paise),
+    paidOn: p.paid_on,
+    note: p.note,
+    createdAt: p.created_at,
+  }));
+});
+
 export interface TripData extends TripAccess {
   members: Member[];
   expenses: Expense[];
+  payments: Payment[];
   report: TripReport;
   me: Member | null;
 }
@@ -168,9 +202,10 @@ export interface TripData extends TripAccess {
 export const getTripData = cache(async (code: string): Promise<TripData | null> => {
   const access = await getTripByCode(code);
   if (!access) return null;
-  const [members, expenses, user] = await Promise.all([
+  const [members, expenses, payments, user] = await Promise.all([
     getMembers(access.trip.id),
     getExpenses(access.trip.id),
+    getPayments(access.trip.id),
     getCurrentUser(),
   ]);
   const ordered = [...members].sort((a, b) => a.position - b.position);
@@ -183,7 +218,8 @@ export const getTripData = cache(async (code: string): Promise<TripData | null> 
     ...access,
     members: ordered,
     expenses,
-    report: buildTripReport(access.trip, ordered, expenses),
+    payments,
+    report: buildTripReport(access.trip, ordered, expenses, payments),
     me: ordered.find((m) => m.userId && m.userId === user?.id) ?? null,
   };
 });

@@ -15,6 +15,8 @@ export function BalanceTable({
   meId?: string | null;
   caption: string;
 }) {
+  // Once repayments are recorded, the last column shows what is still owed.
+  const anyPayments = balances.some((b) => b.paymentsSent > 0 || b.paymentsReceived > 0);
   const totals = balances.reduce(
     (acc, b) => ({ paid: acc.paid + b.totalPaid, share: acc.share + b.totalShare }),
     { paid: 0, share: 0 },
@@ -35,7 +37,7 @@ export function BalanceTable({
               Share
             </th>
             <th scope="col" className="px-4 py-2.5 text-right font-medium">
-              Balance
+              {anyPayments ? "Still owed" : "Balance"}
             </th>
           </tr>
         </thead>
@@ -61,6 +63,21 @@ export function BalanceTable({
                 </td>
                 <td className="px-4 py-2.5 text-right">
                   <BalanceStatusBadge net={b.net} status={b.status} />
+                  {b.paymentsSent > 0 || b.paymentsReceived > 0 ? (
+                    <span className="text-muted-foreground mt-1 block text-xs">
+                      {b.paymentsSent > 0 ? (
+                        <>
+                          Paid back <Money paise={b.paymentsSent} />
+                        </>
+                      ) : null}
+                      {b.paymentsSent > 0 && b.paymentsReceived > 0 ? " · " : null}
+                      {b.paymentsReceived > 0 ? (
+                        <>
+                          Got back <Money paise={b.paymentsReceived} />
+                        </>
+                      ) : null}
+                    </span>
+                  ) : null}
                 </td>
               </tr>
             );

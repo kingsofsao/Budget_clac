@@ -1,4 +1,4 @@
-import { ChevronLeft, Pencil } from "lucide-react";
+import { ChevronLeft, Copy, Pencil } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -9,7 +9,16 @@ import { CategoryIcon } from "@/features/expenses/components/expense-row";
 import { getTripData } from "@/features/trips/queries";
 import { CATEGORIES } from "@/lib/categories";
 import { formatLongDate, formatTimestamp } from "@/lib/dates";
+import { formatBasisPoints } from "@/lib/money";
 import { plural } from "@/lib/utils";
+import type { SplitMethod } from "@/types/domain";
+
+const SPLIT_LABEL: Record<SplitMethod, string> = {
+  equal: "Equally",
+  custom: "Custom amounts",
+  shares: "By shares",
+  percentage: "By percentage",
+};
 
 export const metadata: Metadata = { title: "Expense" };
 
@@ -69,7 +78,7 @@ export default async function ExpenseDetailPage({
             <dt className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
               Split
             </dt>
-            <dd>{expense.splitMethod === "equal" ? "Equally" : "Custom amounts"}</dd>
+            <dd>{SPLIT_LABEL[expense.splitMethod]}</dd>
           </div>
           <div>
             <dt className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
@@ -105,6 +114,16 @@ export default async function ExpenseDetailPage({
                     </span>
                   </th>
                   <td className="py-2 text-right font-medium">
+                    {s.splitValue && expense.splitMethod === "shares" ? (
+                      <span className="text-muted-foreground mr-2 text-xs font-normal">
+                        {s.splitValue} {s.splitValue === 1 ? "share" : "shares"}
+                      </span>
+                    ) : null}
+                    {s.splitValue && expense.splitMethod === "percentage" ? (
+                      <span className="text-muted-foreground mr-2 text-xs font-normal">
+                        {formatBasisPoints(s.splitValue)}
+                      </span>
+                    ) : null}
                     <Money paise={s.sharePaise} />
                   </td>
                 </tr>
@@ -144,6 +163,13 @@ export default async function ExpenseDetailPage({
           >
             <Pencil aria-hidden="true" />
             Edit
+          </Link>
+          <Link
+            href={`${base}/expenses/new?copy=${expense.id}`}
+            className={buttonVariants({ variant: "outline" })}
+          >
+            <Copy aria-hidden="true" />
+            Duplicate
           </Link>
           <DeleteExpenseButton
             code={data.trip.code}

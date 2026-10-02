@@ -3,18 +3,23 @@ import { EmptyState, MemberAvatar, Money } from "@/components/common";
 import type { SettlementTransfer } from "@/lib/calculations";
 import { cn } from "@/lib/utils";
 import type { Member } from "@/types/domain";
+import { RecordPaymentDialog } from "./record-payment-dialog";
 
 export function SettlementList({
   settlements,
   members,
   meId,
   limit,
+  recordable,
 }: {
   settlements: SettlementTransfer[];
   members: Map<string, Member>;
   meId?: string | null;
   limit?: number;
+  /** Show a "Mark paid" button on each transfer (records a payment, informational only). */
+  recordable?: { code: string };
 }) {
+  const memberOptions = [...members.values()].map((m) => ({ id: m.id, name: m.name }));
   if (settlements.length === 0) {
     return (
       <EmptyState
@@ -37,7 +42,10 @@ export function SettlementList({
         return (
           <li
             key={`${t.fromMemberId}-${t.toMemberId}`}
-            className={cn("flex items-center gap-3 px-4 py-3", involvesMe && "bg-accent/60")}
+            className={cn(
+              "flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3",
+              involvesMe && "bg-accent/60",
+            )}
           >
             <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
               <span className="flex min-w-0 items-center gap-2">
@@ -53,7 +61,18 @@ export function SettlementList({
                 <span className="truncate font-medium">{to?.name ?? "Removed person"}</span>
               </span>
             </span>
-            <Money paise={t.amountPaise} className="font-semibold" />
+            <span className="flex items-center gap-2">
+              <Money paise={t.amountPaise} className="font-semibold" />
+              {recordable ? (
+                <RecordPaymentDialog
+                  code={recordable.code}
+                  members={memberOptions}
+                  suggestion={t}
+                  triggerLabel="Mark paid"
+                  triggerSize="sm"
+                />
+              ) : null}
+            </span>
           </li>
         );
       })}

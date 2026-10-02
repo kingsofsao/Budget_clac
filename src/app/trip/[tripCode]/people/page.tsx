@@ -79,6 +79,7 @@ export default async function PeoplePage({
                     canClaim={!m.userId}
                     expensesPaid={b?.expensesPaid ?? 0}
                     expensesJoined={b?.expensesJoined ?? 0}
+                    hasPayments={(b?.paymentsSent ?? 0) + (b?.paymentsReceived ?? 0) > 0}
                   />
                 </li>
               );

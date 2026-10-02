@@ -25,13 +25,13 @@ export type Database = {
           Tables: {
             "expense_participants": {
                   Row: {
-                    "expense_id": string,"member_id": string,"share_paise": number,"trip_id": string
+                    "expense_id": string,"member_id": string,"share_paise": number,"split_value": number | null,"trip_id": string
                   }
                   Insert: {
-                    "expense_id": string,"member_id": string,"share_paise": number,"trip_id": string
+                    "expense_id": string,"member_id": string,"share_paise": number,"split_value"?: number | null,"trip_id": string
                   }
                   Update: {
-                    "expense_id"?: string,"member_id"?: string,"share_paise"?: number,"trip_id"?: string
+                    "expense_id"?: string,"member_id"?: string,"share_paise"?: number,"split_value"?: number | null,"trip_id"?: string
                   }
                   Relationships: [
                     {
@@ -85,6 +85,37 @@ isOneToOne: false
                   }
                   Relationships: [
                     
+                  ]
+                },"settlement_payments": {
+                  Row: {
+                    "amount_paise": number,"created_at": string,"created_by": string | null,"from_member_id": string,"id": string,"note": string | null,"paid_on": string,"to_member_id": string,"trip_id": string
+                  }
+                  Insert: {
+                    "amount_paise": number,"created_at"?: string,"created_by"?: string | null,"from_member_id": string,"id"?: string,"note"?: string | null,"paid_on": string,"to_member_id": string,"trip_id": string
+                  }
+                  Update: {
+                    "amount_paise"?: number,"created_at"?: string,"created_by"?: string | null,"from_member_id"?: string,"id"?: string,"note"?: string | null,"paid_on"?: string,"to_member_id"?: string,"trip_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "settlement_payments_from_fkey"
+      columns: ["trip_id","from_member_id"]
+isOneToOne: false
+      referencedRelation: "trip_members"
+      referencedColumns: ["trip_id","id"]
+    },{
+      foreignKeyName: "settlement_payments_to_fkey"
+      columns: ["trip_id","to_member_id"]
+isOneToOne: false
+      referencedRelation: "trip_members"
+      referencedColumns: ["trip_id","id"]
+    },{
+      foreignKeyName: "settlement_payments_trip_id_fkey"
+      columns: ["trip_id"]
+isOneToOne: false
+      referencedRelation: "trips"
+      referencedColumns: ["id"]
+    }
                   ]
                 },"trip_access": {
                   Row: {
@@ -176,6 +207,9 @@ isOneToOne: false
 "delete_expense":
 { Args: { "p_expense_id": string }; Returns: undefined
                            },
+"delete_payment":
+{ Args: { "p_payment_id": string }; Returns: undefined
+                           },
 "delete_trip":
 { Args: { "p_trip_id": string }; Returns: undefined
                            },
@@ -187,10 +221,19 @@ isOneToOne: false
 "join_trip":
 { Args: { "p_code": string }; Returns: string
                            },
+"leave_trip":
+{ Args: { "p_trip_id": string }; Returns: undefined
+                           },
 "list_my_trips":
 { Args: { "p_limit"?: number }; Returns: {
               "end_date": string,"expense_count": number,"last_accessed_at": string,"member_count": number,"name": string,"public_code": string,"role": string,"start_date": string,"total_paise": number,"updated_at": string
             }[]
+                           },
+"record_payment":
+{ Args: { "p_amount_paise": number,"p_from_member_id": string,"p_note": string,"p_paid_on": string,"p_to_member_id": string,"p_trip_id": string }; Returns: string
+                           },
+"regenerate_trip_code":
+{ Args: { "p_trip_id": string }; Returns: string
                            },
 "remove_member":
 { Args: { "p_member_id": string }; Returns: undefined

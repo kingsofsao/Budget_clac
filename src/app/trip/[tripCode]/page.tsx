@@ -4,6 +4,7 @@ import { BalanceStatusBadge, EmptyState, Panel, Section, Stat } from "@/componen
 import { buttonVariants } from "@/components/ui/button";
 import { ExpenseRow } from "@/features/expenses/components/expense-row";
 import { ClaimMemberPrompt } from "@/features/members/components/claim-member-prompt";
+import { MySettlement } from "@/features/settlements/components/my-settlement";
 import { SettlementList } from "@/features/settlements/components/settlement-list";
 import { ActivityFeed } from "@/features/trips/components/activity-feed";
 import { getActivity, getTripData } from "@/features/trips/queries";
@@ -65,6 +66,10 @@ export default async function TripOverviewPage({ params }: PageProps<"/trip/[tri
           </div>
         ) : null}
       </Panel>
+
+      {me && expenses.length > 0 ? (
+        <MySettlement code={trip.code} me={me} members={members} settlements={report.settlements} />
+      ) : null}
 
       <nav aria-label="Quick actions" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Link href={`${base}/expenses/new`} className={buttonVariants({ size: "lg" })}>

@@ -3,12 +3,21 @@
 import { Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
-import { deleteTripAction } from "@/features/trips/actions";
+import { deletePaymentAction } from "@/features/settlements/actions";
 import { GENERIC_ERROR } from "@/lib/errors";
 
-export function DeleteTripButton({ code, name }: { code: string; name: string }) {
+export function DeletePaymentButton({
+  code,
+  paymentId,
+  label,
+}: {
+  code: string;
+  paymentId: string;
+  label: string;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16,35 +25,36 @@ export function DeleteTripButton({ code, name }: { code: string; name: string })
   return (
     <>
       <Button
-        variant="outline"
-        className="text-destructive self-start"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={`Delete payment: ${label}`}
         onClick={() => {
           setError(null);
           setOpen(true);
         }}
       >
         <Trash2 aria-hidden="true" />
-        Delete trip
       </Button>
       <ConfirmDialog
         open={open}
         onOpenChange={setOpen}
-        title={`Delete “${name}”?`}
-        description="This permanently deletes the trip, its people, every expense and the activity history for everyone in the group. This can't be undone."
-        confirmLabel="Delete trip"
+        title="Delete this recorded payment?"
+        description={`“${label}” will be removed and the balances will go back to showing it as owed.`}
+        confirmLabel="Delete payment"
         pendingLabel="Deleting…"
         pending={pending}
         error={error}
         onConfirm={() =>
           startTransition(async () => {
             try {
-              const result = await deleteTripAction(code);
+              const result = await deletePaymentAction(code, paymentId);
               if (!result.ok) {
                 setError(result.error);
                 return;
               }
               setOpen(false);
-              router.replace("/?deleted=1");
+              toast.success("Payment deleted. Balances updated.");
+              router.refresh();
             } catch {
               setError(GENERIC_ERROR);
             }

@@ -1,13 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { calculateExpenseShares, orderByMembers, SplitError } from "@/lib/calculations";
+import { SplitError } from "@/lib/calculations";
 import { isWithin } from "@/lib/dates";
 import { fail, ok, userMessage, type ActionResult } from "@/lib/errors";
 import type { Json } from "@/lib/supabase/database.types";
 import { createClient } from "@/lib/supabase/server";
 import { parseExpenseForm, uuidSchema } from "@/lib/validation";
 import { getMembers, getTripByCode } from "@/features/trips/queries";
+import { sharesForExpense } from "./split";
 
 const FIX_FIELDS = "Please fix the highlighted fields.";
 
@@ -49,24 +50,9 @@ export async function saveExpenseAction(
 
   let shares;
   try {
-    const ordered = orderByMembers(e.participantIds, members);
-    shares =
-      e.splitMethod === "equal"
-        ? calculateExpenseShares({
-            method: "equal",
-            amountPaise: e.amountPaise,
-            participantIds: ordered,
-          })
-        : calculateExpenseShares({
-            method: "custom",
-            amountPaise: e.amountPaise,
-            shares: ordered.map((memberId) => ({
-              memberId,
-              sharePaise: e.customShares?.get(memberId) ?? 0,
-            })),
-          });
+    shares = sharesForExpense(e, members);
   } catch (err) {
-    if (err instanceof SplitError) return fail(err.message, { customShares: err.message });
+    if (err instanceof SplitError) return fail(err.message, { splitInputs: err.message });
     throw err;
   }
 
@@ -82,7 +68,11 @@ export async function saveExpenseAction(
     p_split_method: e.splitMethod,
     p_expense_date: e.expenseDate,
     p_notes: e.notes ?? "",
-    p_shares: shares.map((s) => ({ member_id: s.memberId, share_paise: s.sharePaise })) as Json,
+    p_shares: shares.map((s) => ({
+      member_id: s.memberId,
+      share_paise: s.sharePaise,
+      ...(s.splitValue ? { split_value: s.splitValue } : {}),
+    })) as Json,
   });
   if (error || !data) return fail(userMessage(error));
   revalidatePath(`/trip/${code}`, "layout");

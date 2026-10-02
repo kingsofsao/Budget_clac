@@ -26,7 +26,7 @@ export default async function SummaryPage({ params }: PageProps<"/trip/[tripCode
   const { tripCode } = await params;
   const data = await getTripData(tripCode);
   if (!data) return null;
-  const { trip, members, expenses, report, me } = data;
+  const { trip, members, expenses, report, me, payments } = data;
   const base = `/trip/${trip.code}`;
   const memberMap = new Map(members.map((m) => [m.id, m]));
   const { totals } = report;
@@ -42,7 +42,7 @@ export default async function SummaryPage({ params }: PageProps<"/trip/[tripCode
         {expenses.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             <CopyButton
-              text={buildSummaryText(trip, members, report)}
+              text={buildSummaryText(trip, members, report, payments)}
               label="Copy Summary"
               successMessage="Summary copied"
               size="sm"
@@ -209,7 +209,7 @@ export default async function SummaryPage({ params }: PageProps<"/trip/[tripCode
             action={
               report.settlements.length > 0 ? (
                 <CopyButton
-                  text={buildSettlementText(trip, members, report)}
+                  text={buildSettlementText(trip, members, report, payments)}
                   label="Copy Settlement"
                   successMessage="Settlement copied"
                   size="sm"
@@ -226,6 +226,13 @@ export default async function SummaryPage({ params }: PageProps<"/trip/[tripCode
                 · {plural(report.receiverCount, "person", "people")} should receive money ·{" "}
                 {plural(report.payerCount, "person", "people")} need to pay.
               </p>
+              {report.recordedPaymentCount > 0 ? (
+                <p className="text-muted-foreground mt-1 text-sm">
+                  Already settled: <Money paise={report.recordedPaymentsPaise} /> across{" "}
+                  {plural(report.recordedPaymentCount, "recorded payment")} (not verified by the
+                  app).
+                </p>
+              ) : null}
             </Panel>
             <SettlementList settlements={report.settlements} members={memberMap} meId={me?.id} />
             <p className="text-muted-foreground text-xs">

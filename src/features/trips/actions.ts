@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { GENERIC_ERROR, fail, ok, userMessage, type ActionResult } from "@/lib/errors";
 import { createClient } from "@/lib/supabase/server";
 import { ensureUser } from "@/lib/supabase/session";
@@ -98,5 +97,28 @@ export async function deleteTripAction(code: string): Promise<ActionResult> {
   const { error } = await supabase.rpc("delete_trip", { p_trip_id: access.trip.id });
   if (error) return fail(userMessage(error));
   revalidatePath("/");
-  redirect("/?deleted=1");
+  return ok(undefined);
+}
+
+/** Owner only: issue a new share code. Old links stop working; members keep access. */
+export async function regenerateCodeAction(code: string): Promise<ActionResult<{ code: string }>> {
+  const access = await getTripByCode(code);
+  if (!access) return fail("You don't have access to this trip.");
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("regenerate_trip_code", { p_trip_id: access.trip.id });
+  if (error || !data) return fail(userMessage(error));
+  revalidatePath("/");
+  revalidatePath(`/trip/${data}`, "layout");
+  return ok({ code: data });
+}
+
+/** Members (not the owner) can remove the trip from their account. */
+export async function leaveTripAction(code: string): Promise<ActionResult> {
+  const access = await getTripByCode(code);
+  if (!access) return fail("You don't have access to this trip.");
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("leave_trip", { p_trip_id: access.trip.id });
+  if (error) return fail(userMessage(error));
+  revalidatePath("/");
+  return ok(undefined);
 }

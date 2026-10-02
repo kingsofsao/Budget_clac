@@ -5,27 +5,28 @@ A group expense-splitting web app for friends on outings and trips, from a singl
 - total trip spending, by category, person and day
 - each person's total paid, actual share, and net balance ("Should receive" / "Should pay" / "Settled")
 - a short list of suggested payments: **who should pay whom, and how much**
+- once people pay each other back, what is **still** owed (repayments are recorded by hand)
 
-> **Trip Split never touches money.** It has no payment gateway, UPI, bank, card or wallet integration, and stores no financial account details. People settle up however they like, outside the app. Every settlement figure is informational only.
+> **Trip Split never touches money.** It has no payment gateway, UPI, bank, card or wallet integration, and stores no financial account details. People settle up however they like, outside the app. Every settlement figure is informational only, and recorded repayments are notes the group keeps: the app never claims to have verified them.
 
 ---
 
 ## Features
 
-| Area     | What's included                                                                                                                                                                                  |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Trips    | Create single-day or multi-day trips, edit details, delete (owner only), recent trips on the home page                                                                                           |
-| Sharing  | Unguessable 8-character share code + link (e.g. `/trip/BGLDEMX2`), native share sheet, copy link / copy code, join screen                                                                        |
-| People   | Guests need only a name (email optional). Members can link their account ("This is me"). Removing someone who appears in any expense is blocked, with an explanation                             |
-| Expenses | Description, amount (₹, stored in paise), paid by, participants, category, date, notes. Payer may be excluded from the split. Equal or custom-amount splits. "Save & add another" for fast entry |
-| History  | Expense list grouped by day; search; filters by category, payer, participant, date and amount range (kept in the URL); expense detail with every share; edit & delete with confirmation          |
-| Balances | Paid / share / balance per person in plain language, a deterministic settlement plan, a live check that totals reconcile, and "Copy Settlement" for WhatsApp                                     |
-| Summary  | Overview stats, category breakdown (chart + table, percentages always sum to 100%), spending by person, spending by day, settlement summary, "Copy Summary"                                      |
-| Export   | CSV of all expenses, plain-text summary download                                                                                                                                                 |
-| Activity | Feed of every change, e.g. "Gokul edited “Lunch” — ₹2,600 → ₹2,800"                                                                                                                              |
-| Auth     | Instant anonymous guest sessions (no sign-up), email + password, magic link, optional Google. A guest can attach an email later and keep their trips                                             |
-| UX       | Mobile-first with a thumb-reachable bottom bar and Add button, desktop tabs, dark mode, empty states everywhere, accessible dialogs, labelled forms, text alternatives for every chart           |
-| PWA      | Installable (manifest + icons). The service worker caches static assets and recently viewed trip pages for poor signal; writes always need a connection                                          |
+| Area     | What's included                                                                                                                                                                                                                                                                                       |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Trips    | Create single-day or multi-day trips, edit details, delete (owner only), leave (members), recent trips on the home page                                                                                                                                                                               |
+| Sharing  | Unguessable 8-character share code + link (e.g. `/trip/BGLDEMX2`), native share sheet, copy link / copy code, join screen. The owner can issue a new code, which cancels old links                                                                                                                    |
+| People   | Guests need only a name (email optional). Members can link their account ("This is me"). Removing someone who appears in any expense or payment is blocked, with an explanation                                                                                                                       |
+| Expenses | Description, amount (₹, stored in paise), paid by, participants, category, date, notes. Payer may be excluded. Split **equally**, by **exact amounts**, by **shares** (e.g. a couple = 2) or by **percentage**, with a live per-person preview. "Save & add another" and **Duplicate** for fast entry |
+| History  | Expense list grouped by day; search; filters by category, payer, participant, date and amount range (kept in the URL); expense detail with every share; edit & delete with confirmation                                                                                                               |
+| Balances | Paid / share / balance per person in plain language, a deterministic settlement plan, **Mark paid** to record repayments (partial or full, with undo), a personal "Your settle-up" card, a live check that totals reconcile, and "Copy Settlement" for WhatsApp                                       |
+| Summary  | Overview stats, category breakdown (chart + table, percentages always sum to 100%), spending by person, spending by day, settlement summary, "Copy Summary"                                                                                                                                           |
+| Export   | CSV of all expenses, plain-text summary download                                                                                                                                                                                                                                                      |
+| Activity | Feed of every change, e.g. "Gokul edited “Lunch” — ₹2,600 → ₹2,800"                                                                                                                                                                                                                                   |
+| Auth     | Instant anonymous guest sessions (no sign-up), email + password, magic link, optional Google. A guest can attach an email later and keep their trips                                                                                                                                                  |
+| UX       | Mobile-first with a thumb-reachable bottom bar and Add button, desktop tabs, dark mode, empty states everywhere, accessible dialogs, labelled forms, text alternatives for every chart                                                                                                                |
+| PWA      | Installable (manifest + icons). The service worker caches static assets and recently viewed trip pages for poor signal; writes always need a connection                                                                                                                                               |
 
 ## Architecture
 
@@ -56,12 +57,15 @@ Supabase
 - All money is an integer number of **paise** (`₹1,800 = 180000`). User input is parsed from the string straight to paise (`parseINR`); there is no float maths anywhere in the calculation path. Formatting to `₹1,800.50` (Indian digit grouping) happens only in the UI (`formatINR`). See `src/lib/money`.
 - **Equal split:** everyone gets `floor(amount / n)`; the remaining `amount mod n` paise go one each to the **first participants in trip-member order** (the order people were added). E.g. ₹100 / 3 → ₹33.34, ₹33.33, ₹33.33. Shares always sum exactly to the amount.
 - **Custom split:** shares must sum to the amount exactly or the expense can't be saved.
+- **Shares / percentage splits:** each person's amount is `amount × weight ÷ total weight`, rounded with the largest-remainder method in integer (BigInt) maths, so the shares always sum exactly to the amount. Percentages are stored as integer basis points (33.33% = 3333) and must total exactly 100%. The database re-checks that every share is within one paisa of its exact proportion.
 - **Percentages** in summaries use the largest-remainder method so they always add up to 100%.
 - **Averages** shown in the UI are display-only and rounded to the nearest paisa.
 
 ### Settlement algorithm
 
 `src/lib/calculations/settlements.ts`: greedy largest-debtor ↔ largest-creditor matching with deterministic tie-breaking (trip member order). Each person only pays or only receives, every non-zero balance is reconciled exactly, and it uses at most (people with a balance − 1) transfers. It is **not** guaranteed to be the global minimum (that problem is NP-hard), but it gives short, practical lists.
+
+**Recorded payments.** When someone pays a friend back (UPI, cash, anything), any member can record it. A payment from A to B moves A's balance up and B's down by the same amount: `net = paid − share + payments sent − payments received`. Suggestions then cover only what is still outstanding; spending figures are unchanged. Recorded payments can be deleted, and every change is in the activity feed. The app never moves money and labels these as "recorded, not verified".
 
 ### Accounting invariants (tested)
 
@@ -71,13 +75,13 @@ Supabase
 4. Sum of "should receive" = sum of "should pay"
 5. Applying the suggested transfers brings every balance to exactly 0
 
-These are checked by 300 randomized trips in the unit tests, and live on the Balances page.
+These are checked by hundreds of randomized trips in the unit tests (with and without recorded payments), and live on the Balances page.
 
 ### Access model
 
 - Every visitor gets an **anonymous Supabase session** the first time they create or join a trip, so RLS always has a user id while nobody is forced to sign up.
 - A trip's share code is its invitation: anyone holding it can join (`join_trip`) and then read and edit that trip. Codes are 8 characters from a 32-symbol alphabet (~1.1 trillion combinations), generated with `gen_random_bytes`. Internal UUIDs are never used in URLs for trips.
-- Only the creator (`owner`) can delete a trip. All members can add, edit or delete expenses and people. The activity feed records who did what.
+- Only the creator (`owner`) can delete a trip or issue a new share code (old links then stop working; existing members keep access). Other members can leave a trip. All members can add, edit or delete expenses, people and recorded payments. The activity feed records who did what.
 
 ## Tech stack
 
@@ -138,10 +142,17 @@ tests/
 | `trip_access`          | (`trip_id`, `user_id`), `role` (`owner`/`member`), `last_accessed_at`                                                                             |
 | `trip_members`         | `id`, `trip_id`, `user_id` (nullable: guests), `display_name` (unique per trip, case-insensitive), `email`, `color`, `position`                   |
 | `expenses`             | `id`, `trip_id`, `description`, `amount_paise` (bigint > 0), `paid_by_member_id`, `category`, `split_method`, `expense_date`, `notes`, timestamps |
-| `expense_participants` | (`expense_id`, `member_id`), `trip_id`, `share_paise` (bigint ≥ 0)                                                                                |
+| `expense_participants` | (`expense_id`, `member_id`), `trip_id`, `share_paise` (bigint ≥ 0), `split_value` (shares or basis points, for weighted splits)                   |
+| `settlement_payments`  | `trip_id`, `from_member_id`, `to_member_id`, `amount_paise` (bigint > 0), `paid_on`, `note`: repayments recorded by hand, never verified          |
 | `trip_activity`        | `trip_id`, `actor_name`, `action`, `subject`, `amount_paise`, `previous_amount_paise`                                                             |
 
-RPC functions: `create_trip`, `get_trip_preview`, `join_trip`, `touch_trip`, `update_trip`, `delete_trip`, `add_member`, `update_member`, `remove_member`, `claim_member`, `save_expense`, `delete_expense`, `set_display_name`, `list_my_trips`. Split methods are a `check` constraint plus a branch in `calculateExpenseShares`. The engine already has an integer `splitByWeights`, so percentage or weighted splits need a new branch, a UI and a constraint value, but no engine rewrite.
+RPC functions: `create_trip`, `get_trip_preview`, `join_trip`, `touch_trip`, `update_trip`, `delete_trip`, `regenerate_trip_code`, `leave_trip`, `add_member`, `update_member`, `remove_member`, `claim_member`, `save_expense`, `delete_expense`, `record_payment`, `delete_payment`, `set_display_name`, `list_my_trips`.
+
+Migrations (applied in order; `npx supabase db push` does this):
+
+1. `20261001000000_initial_schema.sql`: tables, RLS, functions.
+2. `20261002000000_fix_trip_delete_cascade.sql`: **fix** so a trip that has expenses can be deleted (member foreign keys are checked at commit instead of mid-cascade).
+3. `20261003000000_payments_splits_sharing.sql`: shares/percentage splits, recorded payments, new share code, leave trip.
 
 ## Local setup
 
@@ -172,21 +183,23 @@ Both Supabase values are public by design. **No secret keys are used by this app
 - Local: `npm run db:reset` re-creates the local database from `supabase/migrations` and loads `supabase/seed.sql`.
 - Regenerate TypeScript types after schema changes: `npm run db:types`.
 - Production: `npx supabase link --project-ref <ref>` then `npx supabase db push`. `db push` does **not** run `seed.sql`, so demo data never reaches production.
+- **Order matters when deploying a new version:** push the database migrations first, then deploy the app, because new app code calls the new database functions.
 
 ### Commands
 
-| Command                       | What it does                                                                                                                           |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run dev`                 | Dev server                                                                                                                             |
-| `npm run build` / `npm start` | Production build / serve                                                                                                               |
-| `npm run typecheck`           | Generates route types and runs `tsc --noEmit`                                                                                          |
-| `npm run lint`                | ESLint (Next core-web-vitals + TypeScript rules)                                                                                       |
-| `npm run format`              | Prettier                                                                                                                               |
-| `npm test`                    | Vitest unit tests (engine, money, invariants, validation, exports)                                                                     |
-| `npm run verify:demo`         | Prints the full Bangalore breakdown and settlement                                                                                     |
-| `npm run test:db`             | RLS, permission and integrity tests against the local DB (needs `psql`)                                                                |
-| `npm run test:e2e`            | Playwright on mobile + desktop. Builds and serves on :3100 against local Supabase. Run `npm run db:reset` first for the demo-trip test |
-| `npm run check`               | typecheck + lint + unit tests + build                                                                                                  |
+| Command                       | What it does                                                                                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run dev`                 | Dev server                                                                                                                                                                      |
+| `npm run build` / `npm start` | Production build / serve                                                                                                                                                        |
+| `npm run typecheck`           | Generates route types and runs `tsc --noEmit`                                                                                                                                   |
+| `npm run lint`                | ESLint (Next core-web-vitals + TypeScript rules)                                                                                                                                |
+| `npm run format`              | Prettier                                                                                                                                                                        |
+| `npm test`                    | Vitest unit tests (engine, money, invariants, validation, exports)                                                                                                              |
+| `npm run verify:demo`         | Prints the full Bangalore breakdown and settlement                                                                                                                              |
+| `npm run test:db`             | RLS, permission and integrity tests against the local DB (needs `psql`)                                                                                                         |
+| `npm run test:e2e`            | Playwright on mobile + desktop. Builds and serves on :3100 against local Supabase. Run `npm run db:reset` first for the demo-trip test                                          |
+| `npm run check`               | typecheck + lint + unit tests + build                                                                                                                                           |
+| `npm run smoke -- <url>`      | Drives a deployed site in a headless phone browser: creates a `[TEST]` trip, checks splits, balances, payments, edit/delete, join, export access and CSP, then deletes the trip |
 
 ## Deploying
 
@@ -202,7 +215,12 @@ Both Supabase values are public by design. **No secret keys are used by this app
 
 1. Import the Git repository in Vercel (framework preset: Next.js; no extra config needed).
 2. Add `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (and optionally `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH`) for Production and Preview.
-3. Deploy. Security headers are set in `next.config.ts`; trip pages send `noindex`.
+3. Deploy. Security headers are set in `next.config.ts` and a per-request nonce Content-Security-Policy in `src/proxy.ts`; trip pages send `noindex`.
+4. Verify: `npm run smoke -- https://<your-domain>`.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request: type check, lint, format check, unit tests and build; then it starts a local Supabase in the runner and runs the database security tests and the Playwright suite (mobile + desktop). The e2e config always targets the local stack and refuses to run against a non-local Supabase.
 
 ## Security notes
 
@@ -212,17 +230,19 @@ Both Supabase values are public by design. **No secret keys are used by this app
 - Inputs are validated with Zod in every server action, and again in SQL.
 - CSV exports neutralise spreadsheet formula injection. Export routes are access-checked and `no-store`.
 - Auth callback redirects only to same-site relative paths.
+- **Content-Security-Policy** with a fresh nonce per request (`'strict-dynamic'`, no inline scripts, `frame-ancestors 'none'`, `object-src 'none'`, `connect-src` limited to the app and the configured Supabase URL).
+- Payments, code changes and leaving are covered by `tests/db/security.sql` too, including deleting a trip that has expenses and payments.
 - No secrets in the repo: `.env*` is git-ignored (only `.env.example` is committed).
 
 ## Known limitations
 
-- **Share codes are bearer invitations.** Anyone with the link can join and edit. There is no per-member permission model or code rotation yet.
+- **Share codes are bearer invitations.** Anyone with the current link can join and edit. The owner can issue a new code to cut off old links, but there are no roles beyond owner and member.
 - A guest who clears browser data loses access to guest trips (they can rejoin with the code). Attaching an email from **Account** prevents this.
-- Single currency (INR). No offline writes: adding/editing needs a connection (by design, to avoid sync conflicts). Cached pages may be slightly stale offline.
-- No "mark as paid" tracking. Settlements are suggestions only.
+- Single currency (INR). No offline writes: adding or editing needs a connection (by design, to avoid sync conflicts). Cached pages may be slightly stale offline.
+- Recorded payments work on trust: anyone on the trip can record or delete one, and the app cannot check that money actually moved.
 - The greedy settlement is near-minimal, not provably minimal.
 - No rate limiting beyond Supabase Auth's built-in limits.
 
 ## Future improvements
 
-Percentage and weighted-share splits (engine support exists), receipt photos/OCR, multiple currencies, trip cloning and templates, optional manual "paid" status, expense comments, code rotation and member roles, notifications, CSV import, offline-first sync.
+Receipt photos/OCR, multiple currencies, trip templates, expense comments, finer member roles, notifications, CSV import, offline-first sync.

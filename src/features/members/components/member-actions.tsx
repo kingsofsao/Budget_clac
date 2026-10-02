@@ -29,6 +29,8 @@ interface Props {
   canClaim: boolean;
   expensesPaid: number;
   expensesJoined: number;
+  /** True when the person appears in recorded payments. */
+  hasPayments?: boolean;
 }
 
 export function MemberActions({
@@ -38,6 +40,7 @@ export function MemberActions({
   canClaim,
   expensesPaid,
   expensesJoined,
+  hasPayments = false,
 }: Props) {
   const router = useRouter();
   const [editOpen, setEditOpen] = useState(false);
@@ -47,7 +50,7 @@ export function MemberActions({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const inUse = expensesPaid > 0 || expensesJoined > 0;
+  const inUse = expensesPaid > 0 || expensesJoined > 0 || hasPayments;
 
   return (
     <div className="flex items-center gap-1">
@@ -172,12 +175,13 @@ export function MemberActions({
               <div className="flex flex-col gap-2">
                 <p>
                   {member.name} paid for {plural(expensesPaid, "expense")} and shares in{" "}
-                  {plural(expensesJoined, "expense")}. Removing them would change everyone&apos;s
-                  balances, so past expenses are never changed silently.
+                  {plural(expensesJoined, "expense")}
+                  {hasPayments ? ", and appears in recorded payments" : ""}. Removing them would
+                  change everyone&apos;s balances, so history is never changed silently.
                 </p>
                 <p>
-                  To remove {member.name}, first edit those expenses to take them out (or delete the
-                  expenses).
+                  To remove {member.name}, first edit or delete those expenses
+                  {hasPayments ? " and delete their recorded payments" : ""}.
                 </p>
               </div>
             </DialogDescription>

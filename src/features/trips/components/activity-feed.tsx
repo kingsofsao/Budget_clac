@@ -26,6 +26,14 @@ function describe(a: ActivityItem): string {
       return a.previousAmountPaise !== null
         ? `${a.actorName} edited “${subject}” — ${formatINR(a.previousAmountPaise)} → ${amount}`
         : `${a.actorName} edited “${subject}” — ${amount}`;
+    case "member_left":
+      return `${a.actorName} left the trip`;
+    case "payment_recorded":
+      return `${a.actorName} recorded a payment: ${subject} ${amount}`;
+    case "payment_deleted":
+      return `${a.actorName} deleted a recorded payment: ${subject} ${amount}`;
+    case "code_regenerated":
+      return `${a.actorName} changed the trip code (old links no longer work)`;
     case "expense_deleted":
       return `${a.actorName} deleted “${subject}” — ${amount}`;
     default:
