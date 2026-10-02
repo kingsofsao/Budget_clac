@@ -1,0 +1,26 @@
+node_modules
+.next
+out
+build
+coverage
+*.tsbuildinfo
+next-env.d.ts
+
+# env files — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# testing
+playwright-report
+test-results
+blob-report
+playwright/.cache
+
+# supabase local state
+supabase/.branches
+supabase/.temp
+
+.vercel
+.DS_Store
+npm-debug.log*
